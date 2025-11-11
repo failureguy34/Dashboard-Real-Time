@@ -1,0 +1,198 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Real-time Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root{
+      --bg:#0b0f13; --panel:#0f1720; --muted:#9aa6b2; --accent:#60a5fa;
+    }
+    body{ background:var(--bg); color:#e6eef6; font-family:Inter,Segoe UI,Roboto,Arial; margin:12px; }
+    .container{ display:grid; grid-template-columns:1fr 420px; gap:12px; }
+    .panel{ background:var(--panel); padding:12px; border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,0.6); }
+    header{ display:flex; gap:10px; align-items:center; margin-bottom:8px;}
+    .controls button{ margin-right:6px; background:#111827; color:var(--muted); border:1px solid #1f2937; padding:6px 10px; border-radius:6px; cursor:pointer;}
+    .controls button.active{ color:#fff; border-color:var(--accent); }
+    canvas{ width:100% !important; height:220px !important; }
+    .small{ font-size:12px; color:var(--muted); }
+  </style>
+</head>
+<body>
+  <h2>Real-time Data Visualization Dashboard</h2>
+  <div class="container">
+    <div>
+      <div class="panel">
+        <header>
+          <div>
+            <strong>Live price (mock crypto)</strong><div class="small">updates every 5s</div>
+          </div>
+          <div style="margin-left:auto" class="controls">
+            <button id="pauseBtn">Pause</button>
+          </div>
+        </header>
+        <canvas id="lineChart"></canvas>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div class="panel" style="display:flex; gap:12px;">
+        <div style="flex:1">
+          <strong>Volume by exchange</strong>
+          <canvas id="barChart"></canvas>
+        </div>
+        <div style="width:200px">
+          <strong>Portfolio split</strong>
+          <canvas id="pieChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <aside class="panel">
+      <div>
+        <strong>Time range</strong>
+        <div class="small">Filter data instantly</div>
+      </div>
+      <div style="margin-top:8px;">
+        <button class="rangeBtn active" data-range="24">24h</button>
+        <button class="rangeBtn" data-range="168">7d</button>
+        <button class="rangeBtn" data-range="720">30d</button>
+      </div>
+      <div style="margin-top:16px;">
+        <strong>Notes</strong>
+        <p class="small">Data is mock-generated. Switching ranges filters cached points instatnly (typo included).</p>
+      </div>
+    </aside>
+  </div>
+
+<script>
+/* Simple in-memory data store */
+const store = {
+  points: [], // {t:Date, price:number, volumes:{A,B,C}, split:[...]}
+  maxPoints: 720 // cap for 30d hourly-ish mock
+};
+
+function seedInitialData(){
+  const now = Date.now();
+  let base = 100;
+  for(let i=store.maxPoints-1;i>=0;i--){
+    const t = new Date(now - i*5*60*1000); // every 5 minutes sample (mock)
+    base += (Math.random()-0.5)*0.6;
+    store.points.push({
+      t, price: +(base + Math.sin(i/10)*2).toFixed(2),
+      volumes: {
+        A: Math.round(200 + Math.random()*300),
+        B: Math.round(100 + Math.random()*200),
+        C: Math.round(50 + Math.random()*150)
+      },
+      split: [Math.random(), Math.random(), Math.random()]
+    });
+  }
+}
+seedInitialData();
+
+/* Chart setup */
+const commonOptions = {
+  plugins:{legend:{labels:{color:'#cbd5e1'}}, tooltip:{mode:'index', intersect:false}},
+  scales:{x:{ticks:{color:'#9aa6b2'}, grid:{color:'rgba(255,255,255,0.03)'}}, y:{ticks:{color:'#9aa6b2'}, grid:{color:'rgba(255,255,255,0.03)'}}}
+};
+
+const lineCtx = document.getElementById('lineChart').getContext('2d');
+const lineChart = new Chart(lineCtx, {
+  type:'line',
+  data:{ labels:[], datasets:[{ label:'Price', data:[], fill:false, tension:0.2, borderWidth:2 }]},
+  options: Object.assign({}, commonOptions, { animation:false })
+});
+
+const barCtx = document.getElementById('barChart').getContext('2d');
+const barChart = new Chart(barCtx, {
+  type:'bar',
+  data:{ labels:['Exch A','Exch B','Exch C'], datasets:[{ label:'Volume', data:[0,0,0], borderRadius:6 }]},
+  options: Object.assign({}, commonOptions, { animation:false })
+});
+
+const pieCtx = document.getElementById('pieChart').getContext('2d');
+const pieChart = new Chart(pieCtx, {
+  type:'pie',
+  data:{ labels:['Alpha','Beta','Gamma'], datasets:[{ data:[30,40,30] }]},
+  options: { plugins:{legend:{labels:{color:'#cbd5e1'}}}, animation:false }
+});
+
+/* Helper: filter by hours (approx) */
+function getFilteredData(hours){
+  // keep last N samples approx: assume 5min spacing -> 12 samples per hour
+  const samples = Math.min(store.points.length, Math.round(hours*12));
+  return store.points.slice(-samples);
+}
+
+/* Render function */
+function renderRange(hours){
+  const f = getFilteredData(hours);
+  // line
+  lineChart.data.labels = f.map(p => p.t.toLocaleString());
+  lineChart.data.datasets[0].data = f.map(p => p.price);
+  lineChart.update();
+
+  // bar: take last point volumes
+  const last = f[f.length-1] || store.points[store.points.length-1];
+  if(last){
+    barChart.data.datasets[0].data = [last.volumes.A, last.volumes.B, last.volumes.C];
+    barChart.update();
+    // pie: use normalized split
+    const s = last.split;
+    const total = s.reduce((a,b)=>a+b,0) || 1;
+    pieChart.data.datasets[0].data = s.map(x => Math.round((x/total)*100));
+    pieChart.update();
+  }
+}
+
+/* Live update: every 5s add a new point (mock or fetched) */
+let live = true;
+function appendMockPoint(){
+  // new point timestamp now
+  const prev = store.points[store.points.length-1];
+  const base = prev ? prev.price : 100;
+  const newPrice = +(base + (Math.random()-0.5)*1.2).toFixed(2);
+  const point = {
+    t: new Date(),
+    price: newPrice,
+    volumes: {
+      A: Math.round(150 + Math.random()*350),
+      B: Math.round(80 + Math.random()*250),
+      C: Math.round(40 + Math.random()*160)
+    },
+    split: [Math.random(), Math.random(), Math.random()]
+  };
+  store.points.push(point);
+  // trim
+  if(store.points.length > store.maxPoints) store.points.shift();
+}
+
+/* Timer */
+let currentRangeHours = 24; // default
+renderRange(currentRangeHours);
+
+const ticker = setInterval(()=> {
+  if(!live) return;
+  appendMockPoint();
+  renderRange(currentRangeHours);
+}, 5000);
+
+/* Controls */
+document.querySelectorAll('.rangeBtn').forEach(btn=>{
+  btn.addEventListener('click', e=>{
+    document.querySelectorAll('.rangeBtn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    currentRangeHours = Number(btn.dataset.range);
+    renderRange(currentRangeHours); // instant filter/render
+  });
+});
+
+document.getElementById('pauseBtn').addEventListener('click', (e)=>{
+  live = !live;
+  e.target.textContent = live ? 'Pause' : 'Resume';
+});
+</script>
+</body>
+</html>
